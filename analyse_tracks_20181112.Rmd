@@ -1,0 +1,769 @@
+---
+title: "Analyse TRACKMATE tracks"
+output: html_notebook
+---
+
+---
+TUE 11/12/2018
+---
+Analyse tracks from TRACKMATE results for speed. Try to find measures to identify tracks that might need correction + looking at the mean speed to see if there is a difference between the different donor types.
+
+```{r}
+# read in file
+df_stats_base_dir <- "/Users/dominiks/Desktop/ANALYSIS/N4/"
+experiments <- c("N4-2-13")
+wells <- seq(5, 8)
+sites <- seq(0, 2)
+analysis_dir <- "/ANALYSIS/TRACKING_DC/"
+clips_dir <- "/ANALYSIS/TRACKING_DC_INDV/"
+examples_dir <- "/ANALYSIS/TRACKING_DC_EXAMPLES/"
+stats_file <- "-tracks.csv"
+
+# well mapping
+well_donor_map <- hash(c(
+  "N4-2-13" = hash(c(
+    "5" = "B16", "6" = "3T3", "7" = "PF", "8" = "FL-DC"
+  ))
+))
+
+dfs_pool <- list()
+for (cur_exp in experiments) {
+  for (cur_well in wells) {
+    for (cur_site in sites) {
+      cur_df <- read.csv(
+        paste(df_stats_base_dir, cur_exp, analysis_dir,
+              "w", cur_well, "_s", cur_site,
+              stats_file, sep = ""))
+      
+      cur_df$exp <- cur_exp
+      cur_df$well <- cur_well
+      cur_df$site <- cur_site
+      cur_df$donor <- "NONE"
+      
+      # map donors to wells
+      cur_df$donor <- well_donor_map[[cur_exp]][[1]][[as.character(cur_well)]]
+      
+      dfs_pool[[paste(cur_exp, "_w", cur_well, "_s", cur_site, sep = "")]] <- cur_df
+      remove(cur_df)
+    }
+  }
+}
+
+# merge experiments
+df_tracking <- do.call("rbind", dfs_pool)
+```
+
+Plot measures from tracks.
+```{r fig_tracks, fig.height = 4, fig.width = 4}
+require(ggplot2)
+library(scales)
+
+cur_df_plot <- df_tracking
+
+donor_levels <- c("FL-DC", "PF", "3T3", "B16")
+cur_df_plot$donor <- factor(cur_df_plot$donor, levels = donor_levels)
+
+ggplot(data = cur_df_plot, aes(x=factor(donor), y=TRACK_DISPLACEMENT)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank()
+        ) +
+  xlab ("Donors") + ylab("Displacement (μm)")
+ggplot(data = cur_df_plot, aes(x=factor(donor), y=TRACK_MEAN_SPEED)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank()
+        ) +
+  xlab ("Donors") + ylab("Speed (μm/min)")
+```
+
+```{r}
+xlim <- c(0, 300)
+ylim <- c(0, 5)
+alpha_val <- 0.4
+
+plot(TRACK_MEAN_SPEED ~ TRACK_DISPLACEMENT,
+     data = cur_df_plot[(cur_df_plot$well == 5),],
+     col = alpha("Black", alpha_val), pch = 16, cex = 0.5,
+     xlim = xlim, ylim = ylim)
+par(new = T)
+plot(TRACK_MEAN_SPEED ~ TRACK_DISPLACEMENT,
+     data = cur_df_plot[(cur_df_plot$well == 6),],
+     col = alpha("Cyan", alpha_val), pch = 16, cex = 0.5,
+     xlim = xlim, ylim = ylim)
+par(new = T)
+plot(TRACK_MEAN_SPEED ~ TRACK_DISPLACEMENT,
+     data = cur_df_plot[(cur_df_plot$well == 7),],
+     col = alpha("Magenta", alpha_val), pch = 16, cex = 0.5,
+     xlim = xlim, ylim = ylim)
+par(new = T)
+plot(TRACK_MEAN_SPEED ~ TRACK_DISPLACEMENT,
+     data = cur_df_plot[(cur_df_plot$well == 8),],
+     col = alpha("Orange", alpha_val), pch = 16, cex = 0.5,
+     xlim = xlim, ylim = ylim)
+```
+
+Extract examples for each well.
+```{r}
+# find the mean of speed and displacement
+# select random examples withinconfidence interval
+
+pc_ci <- 0.999
+num_examples <- 4
+min_duration <- 300 # min
+cols_to_show <- c("site", "Label")
+copy_tif <- T
+copy_clip <- F
+
+for (cur_exp in experiments) {
+  cur_df_sample <- df_tracking[df_tracking$TRACK_DURATION >= min_duration,]
+  cur_base_dir <- paste(df_stats_base_dir, cur_exp, sep = "")
+  
+  # remove previous examples
+  unlink(paste(cur_base_dir, examples_dir, "*", sep = ""))
+  
+  for (cur_donor in unique(cur_df_sample$donor)) {
+    cur_df_tracking <- cur_df_sample[cur_df_sample$donor == cur_donor,]
+    
+    # calculate means
+    cur_mean_speed <- mean(cur_df_tracking$TRACK_MEAN_SPEED)
+    cur_mean_displ <- mean(cur_df_tracking$TRACK_DISPLACEMENT)
+    cur_sd_speed <- sd(cur_df_tracking$TRACK_MEAN_SPEED)
+    cur_sd_displ <- sd(cur_df_tracking$TRACK_DISPLACEMENT)
+    
+    # calculate confidence intervals
+    cur_ci_speed <- qnorm(pc_ci)*cur_sd_speed/sqrt(num_examples)
+    cur_ci_displ <- qnorm(pc_ci)*cur_sd_displ/sqrt(num_examples)
+    
+    cur_df_subset <- cur_df_tracking[
+      (cur_df_tracking$TRACK_MEAN_SPEED >= cur_mean_speed * (1 - cur_ci_speed))
+      & (cur_df_tracking$TRACK_MEAN_SPEED <= cur_mean_speed * (1 + cur_ci_speed))
+      & (cur_df_tracking$TRACK_DISPLACEMENT >= cur_mean_displ * (1 - cur_ci_displ))
+      & (cur_df_tracking$TRACK_DISPLACEMENT <= cur_mean_displ * (1 + cur_ci_displ)),
+    ]
+    
+    cur_samples <- cur_df_subset[sample(nrow(cur_df_subset), num_examples), ]
+    print(paste("SAMPLES for ", cur_donor, sep = ""))
+    
+    # order by site
+    cur_samples <- cur_samples[order(cur_samples$site),]
+    
+    for (cur_sample_id in seq(1, nrow(cur_samples))){
+      cur_sample <- cur_samples[cur_sample_id,]
+      
+      # cat("Site", "\t", cur_sample$site, "\t",
+      #     "Track ID", "\t", cur_sample$TRACK_INDEX, "\n")
+      
+      # copy clip
+      if (copy_clip == T) {
+        file.copy(paste(cur_base_dir, clips_dir, "w", cur_sample$well, "_s",
+                        cur_sample$site, "_i", cur_sample$TRACK_ID, ".avi", sep = ""),
+                  paste(cur_base_dir, examples_dir, sep = ""))
+      }
+        
+      # copy tif
+      if (copy_tif == T) {
+        file.copy(paste(cur_base_dir, clips_dir, "w", cur_sample$well, "_s",
+                        cur_sample$site, "_i", cur_sample$TRACK_ID, ".tif", sep = ""),
+                  paste(cur_base_dir, examples_dir, sep = ""))
+      }
+    }
+  }
+}
+```
+
+---
+THU 13/12/2018
+---
+Connect spots with CVC donuts from FIJI (extract_sampling_dc_v6.ijm) and Python (link_cvc_to_dc_tracks.py).
+```{r}
+
+sampling_dir <- "/ANALYSIS/SAMPLING_DC/"
+sampling_suffix <- "_dc_seg.tif"
+cvc_suffix <- "-cvc.csv"
+cvc_threshold <- 5
+cvc_dir <- "/ANALYSIS/TRACKING_DC_CVC/"
+wells <- seq(5, 7)
+
+# assign '0' to CVC
+df_tracking$CVC_COUNT <- 0
+df_tracking$CVC_POS <- F
+
+# go through experiments, wells and sites
+for (cur_exp in experiments) {
+  for (cur_well in wells) {
+    for (cur_site in sites) {
+      # read in cvc
+      cur_cvc_df <- read.csv(
+        paste(df_stats_base_dir, cur_exp, analysis_dir,
+              "w", cur_well, "_s", cur_site, cvc_suffix, sep = ""))
+      
+      # sum up CVC information
+      cur_cvc_aggr <- aggregate(IS_CVC_POS ~ TRACK_ID, cur_cvc_df, sum)
+      cvc_pos_track_ids <- cur_cvc_aggr[cur_cvc_aggr$IS_CVC_POS >= cvc_threshold,]$TRACK_ID
+      
+      df_tracking[(df_tracking$exp == cur_exp)
+                  & (df_tracking$well == cur_well)
+                  & (df_tracking$site == cur_site)
+                  & (df_tracking$TRACK_INDEX %in% cvc_pos_track_ids),]$CVC_POS <- T
+    }
+  }
+}
+```
+
+```{r}
+# copy relevant CVC+ tracks
+min_duration <- 180 # min
+
+copy_tif <- T
+copy_clip <- F
+
+for (cur_exp in experiments) {
+  cur_df_sample <- df_tracking[(df_tracking$exp == cur_exp) &
+                               (df_tracking$TRACK_DURATION >= min_duration),]
+  cur_base_dir <- paste(df_stats_base_dir, cur_exp, sep = "")
+  
+  # remove previous examples
+  unlink(paste(cur_base_dir, cvc_dir, "*", sep = ""))
+  
+  for (cur_well in wells) {
+    cur_df_tracking <- cur_df_sample[cur_df_sample$well == cur_well,]
+    
+    cur_samples <- cur_df_tracking[(cur_df_tracking$CVC_POS == T), ]
+    
+    # order by site
+    cur_samples <- cur_samples[order(cur_samples$site),]
+    
+    for (cur_sample_id in seq(1, nrow(cur_samples))){
+      cur_sample <- cur_samples[cur_sample_id,]
+      
+      # copy clip
+      if (copy_clip == T){
+        file.copy(paste(cur_base_dir, clips_dir, "w", cur_sample$well, "_s",
+                        cur_sample$site, "_i", cur_sample$TRACK_INDEX, ".avi", sep = ""),
+                  paste(cur_base_dir, cvc_dir, sep = ""))
+      }
+      
+      # copy tif
+      if (copy_tif == T){
+        file.copy(paste(cur_base_dir, clips_dir, "w", cur_sample$well, "_s",
+                        cur_sample$site, "_i", cur_sample$TRACK_INDEX, ".tif", sep = ""),
+                  paste(cur_base_dir, cvc_dir, sep = ""))
+      }
+    }
+  }
+}
+```
+
+---
+FRI 14/12/2018
+---
+Show statistics of CVC+ tracks.
+```{r}
+require(ggplot2)
+library(scales)
+
+dat_to_plot <- table(df_tracking[df_tracking$CVC_POS == T, c("exp", "well")])
+
+ggplot(data = dat_to_plot, aes(x=factor(well), y=CVC_POS)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1)
+```
+
+---
+FRI 11/01/2019
+---
+
+Make a heatmap to show CVC uptake of the tracks. The aim is to extract the tracks that acquire the CVC signal during the tracking. Then you can look at the individual tracks and see if the cells change their behaviour, eg. slow down for sampling and then speed up again.
+```{r}
+# load data
+spots_cvc_file <- "-spots_cvc.csv"
+links_cvc_file <- "-links.csv"
+
+dfs_spots_pool <- list()
+dfs_links_pool <- list()
+for (cur_exp in experiments) {
+  for (cur_well in wells) {
+    for (cur_site in sites) {
+      cur_spots_df <- read.csv(
+        paste(df_stats_base_dir, cur_exp, analysis_dir,
+              "w", cur_well, "_s", cur_site,
+              spots_cvc_file, sep = ""))
+      
+      cur_links_df <- read.csv(
+        paste(df_stats_base_dir, cur_exp, analysis_dir,
+              "w", cur_well, "_s", cur_site,
+              links_cvc_file, sep = ""))
+      
+      cur_spots_df$exp <- cur_exp
+      cur_spots_df$well <- cur_well
+      cur_spots_df$site <- cur_site
+      cur_spots_df$donor <- "NONE"
+      
+      cur_links_df$exp <- cur_exp
+      cur_links_df$well <- cur_well
+      cur_links_df$site <- cur_site
+      cur_links_df$donor <- "NONE"
+      
+      # map donors to wells
+      cur_spots_df$donor <- well_donor_map[[cur_exp]][[1]][[as.character(cur_well)]]
+      cur_links_df$donor <- well_donor_map[[cur_exp]][[1]][[as.character(cur_well)]]
+      
+      dfs_spots_pool[[paste(cur_exp, "_w", cur_well, "_s", cur_site, sep = "")]] <- cur_spots_df
+      dfs_links_pool[[paste(cur_exp, "_w", cur_well, "_s", cur_site, sep = "")]] <- cur_links_df
+      
+      remove(cur_spots_df)
+      remove(cur_links_df)
+    }
+  }
+}
+
+# merge experiments
+df_spots <- do.call("rbind", dfs_spots_pool)
+df_links <- do.call("rbind", dfs_links_pool)
+```
+
+```{r fig_cvc_heatmap, fig.height = 10, fig.width = 10}
+library(tidyr)
+
+timepoints <- 160
+top_hits_to_get <- 5
+copy_top_hits <- F
+preloaded_time <- 6
+
+calc_cvc_per_track <- F
+calc_norm_frame_per_track <- T
+
+tracking_images_dir <- "/ANALYSIS/TRACKING_CVC/TRACKING_DC_INDV/"
+tracking_movies_dir <- "/ANALYSIS/TRACKING_MOVIES/TRACKING_DC_INDV/"
+
+# combine well, site and track id
+df_spots$NORM_ID <- paste(
+  "w", df_spots$well,
+  "_s", df_spots$site,
+  "_i", df_spots$TRACK_ID,
+  sep = "")
+df_links$NORM_ID <- paste(
+  "w", df_links$well,
+  "_s", df_links$site,
+  "_i", df_links$TRACK_ID,
+  sep = "")
+df_tracking$NORM_ID <- paste(
+  "w", df_tracking$well,
+  "_s", df_tracking$site,
+  "_i", df_tracking$TRACK_ID,
+  sep = "")
+
+if (calc_cvc_per_track == T) {
+  df_spots$TRACK_CVC_POS <- 0
+  
+  # determine CVC+ Tracks
+  cur_cvc_aggr <- aggregate(IS_CVC_POS ~ NORM_ID, df_spots, sum)
+  
+  for (cur_id in cur_cvc_aggr$NORM_ID){
+    df_spots[df_spots$NORM_ID == cur_id,]$TRACK_CVC_POS <-
+      cur_cvc_aggr[cur_cvc_aggr$NORM_ID == cur_id,]$IS_CVC_POS
+  }
+}
+
+if (calc_norm_frame_per_track == T) {
+  df_spots$NORM_FRAME <- -1
+  
+  # normalise frames
+  cur_time_aggr <- aggregate(FRAME ~ NORM_ID, df_spots, min)
+  
+  for (cur_id in cur_time_aggr$NORM_ID){
+    df_spots[df_spots$NORM_ID == cur_id,]$NORM_FRAME <-
+      df_spots[df_spots$NORM_ID == cur_id,]$FRAME - cur_time_aggr[cur_time_aggr$NORM_ID == cur_id,]$FRAME
+  }
+}
+
+# determine non-preloaded tracks
+df_spots$TRACK_PRELOADED <- F
+preloaded_ids <- unique(
+  df_spots[(df_spots$NORM_FRAME < preloaded_time) &
+                df_spots$IS_CVC_POS == 1,]$NORM_ID)
+if (length(preloaded_ids) > 0) {
+  df_spots[df_spots$NORM_ID %in% preloaded_ids, ]$TRACK_PRELOADED <- T
+}
+
+```
+
+```{r}
+# go through donors
+for (cur_donor in unique(df_spots$donor)) {
+  # select data
+  dat_to_plot <- df_spots[df_spots$donor == cur_donor,
+                          c("well", "site", "TRACK_ID","NORM_FRAME", "IS_CVC_POS",
+                            "NORM_ID", "TRACK_PRELOADED", "FRAME")]
+
+  # select only CVC+ and non-preloaded tracks
+  dat_to_plot <- dat_to_plot[(dat_to_plot$TRACK_CVC_POS >= cvc_threshold) &
+                               (dat_to_plot$TRACK_PRELOADED == F),]
+  
+  # spread CVC values
+  dat_spread <- spread(dat_to_plot[, c("FRAME", "IS_CVC_POS", "NORM_ID")],
+                       FRAME, IS_CVC_POS)
+  dat_spread[is.na(dat_spread)] <- -1
+  
+  # sort dataframe according to track id
+  cur_cvc_aggr <- aggregate(IS_CVC_POS ~ NORM_ID, dat_to_plot, sum)
+  cur_cvc_aggr <- cur_cvc_aggr[with(cur_cvc_aggr, order(IS_CVC_POS)),]
+  dat_spread$NORM_ID <- factor(dat_spread$NORM_ID, levels=cur_cvc_aggr$NORM_ID)
+  dat_spread <- dat_spread[order(dat_spread$NORM_ID),]
+  rownames(dat_spread) <- dat_spread$NORM_ID
+  
+  # convert to matrix
+  dat_matrix <- data.matrix(dat_spread[, -1])
+  
+  # add columns if necessary
+  zero_matrix <- matrix(-1, nrow = nrow(dat_matrix), ncol = (timepoints - ncol(dat_matrix)))
+  dat_matrix <- cbind(dat_matrix, zero_matrix)
+  colnames(dat_matrix) <- seq(0, (timepoints-1))
+  
+  hm_colours <- c("Black", "Cyan", "Magenta")
+  
+  # plot heatmap
+  dat_heatmap <- heatmap(dat_matrix,
+                         Rowv=NA, Colv=NA,
+                         col = hm_colours, scale="none")
+  
+  # copy top hits
+  top_hit_ids <- tail(dat_spread$NORM_ID, top_hits_to_get)
+  
+  if (copy_top_hits == T) {
+    for (cur_id in top_hit_ids){
+      cur_base_dir <- paste(df_stats_base_dir, experiments[1], sep = "")
+      
+      cur_dat_row <- dat_to_plot[dat_to_plot$NORM_ID == cur_id, 
+                                 c("well", "site", "TRACK_ID")][1,]
+      cur_well <- cur_dat_row$well
+      cur_site <- cur_dat_row$site
+      cur_track_id <- cur_dat_row$TRACK_ID
+      
+      # copy clip
+      file.copy(paste(cur_base_dir, tracking_movies_dir, "w", cur_well, "_s",
+                            cur_site, "_i", cur_track_id, ".avi", sep = ""),
+                      paste(cur_base_dir, cvc_dir, sep = ""))
+      
+      # copy tif
+      file.copy(paste(cur_base_dir, tracking_images_dir, "w", cur_well, "_s",
+                      cur_site, "_i", cur_track_id, ".tif", sep = ""),
+                paste(cur_base_dir, cvc_dir, sep = ""))
+    }
+  }
+}
+```
+
+```{r fig_cvc_speed, fig.height = 20, fig.width = 20}
+require(ggplot2)
+library(scales)
+
+# merge links and spot information
+# IS_CVC_POS onto SPOT_TARGET_ID
+df_links_spots <- merge(
+  df_links,
+  df_spots[, c("NORM_ID", "ID", "IS_CVC_POS",
+               "TRACK_PRELOADED", "NORM_FRAME", "FRAME")],
+  by.x = c("NORM_ID", "SPOT_TARGET_ID"),
+  by.y = c("NORM_ID", "ID"),
+  all.x = T)
+
+ylim <- 4
+alpha_val <- 0.2
+dat_lim <- 30
+time_cutoff <- 100
+min_track_duration <- 50
+last_frame_cutoff <- 10
+
+###
+# MON 21/01/2019
+###
+library(EBImage)
+morph_kern <- makeBrush(5, shape='box')
+df_links_spots_adj <- df_links_spots
+df_links_spots_adj$TRACK_CVC_REGIONS <- 0
+
+# go through all tracks and clean up CVC signal
+for (cur_norm_id in unique(df_links_spots_adj$NORM_ID)) {
+  cur_x <- df_links_spots_adj[(df_links_spots_adj$NORM_ID == cur_norm_id),]$IS_CVC_POS
+  
+  # prepare data
+  cur_x <- array(as.numeric(unlist(cur_x)),
+                 dim=c(1,length(cur_x)))
+  
+  # close gaps between CVC signal
+  cur_closed_x <- closing(cur_x, morph_kern)
+  
+  # remove isolated CVC signals
+  cur_opened_x <- opening(cur_closed_x, morph_kern)
+  morph_x <- cur_opened_x[1,]
+  
+  # copy data back to df
+  df_links_spots_adj[(df_links_spots_adj$NORM_ID == cur_norm_id),]$IS_CVC_POS <- morph_x
+  
+  # count CVC regions
+  cur_cvc_counter <- 0
+  last_x <- -1
+  for (i in morph_x){
+    if (i != last_x && i == 1){
+      cur_cvc_counter <- cur_cvc_counter + 1
+    }
+    
+    last_x <- i
+  }
+  df_links_spots_adj[(df_links_spots_adj$NORM_ID == cur_norm_id),]$TRACK_CVC_REGIONS <- cur_cvc_counter
+}
+
+# recalculate CVC per track
+df_links_spots_adj$TRACK_CVC_POS <- 0
+  
+# determine CVC+ Tracks
+cur_cvc_aggr <- aggregate(IS_CVC_POS ~ NORM_ID, df_links_spots_adj, sum)
+
+for (cur_id in cur_cvc_aggr$NORM_ID){
+  df_links_spots_adj[df_links_spots_adj$NORM_ID == cur_id,]$TRACK_CVC_POS <-
+    cur_cvc_aggr[cur_cvc_aggr$NORM_ID == cur_id,]$IS_CVC_POS
+}
+
+# determine non-preloaded tracks
+df_links_spots_adj$TRACK_PRELOADED <- F
+preloaded_ids <- unique(
+  df_links_spots_adj[(df_links_spots_adj$NORM_FRAME < preloaded_time) &
+                df_links_spots_adj$IS_CVC_POS == 1,]$NORM_ID)
+df_links_spots_adj[df_links_spots_adj$NORM_ID %in% preloaded_ids, ]$TRACK_PRELOADED <- T
+
+# determine last norm frame for each track
+df_links_spots_adj$TRACK_LAST_NORM_FRAME <- 0
+cur_last_frames_aggr <- aggregate(NORM_FRAME ~ NORM_ID, df_links_spots_adj, max)
+
+for (cur_id in cur_last_frames_aggr$NORM_ID){
+  df_links_spots_adj[df_links_spots_adj$NORM_ID == cur_id,]$TRACK_LAST_NORM_FRAME <-
+    cur_last_frames_aggr[cur_last_frames_aggr$NORM_ID == cur_id,]$NORM_FRAME
+}
+
+###
+# END
+###
+
+# go through donors
+donor_levels <- c("PF", "3T3", "B16")
+df_spots$donor <- factor(df_spots$donor, levels = donor_levels)
+df_spots <- df_spots[with(df_spots, order(donor)),]
+
+donor_plots <- c()
+for (cur_donor in unique(df_spots$donor)) {
+  # select data
+  dat_to_plot <- df_links_spots_adj[df_links_spots_adj$donor == cur_donor, ]
+
+  # limit data to tracks starting within the first hour and that are x long  
+  norm_ids_to_plot <- unique(dat_to_plot[
+    (dat_to_plot$FRAME - dat_to_plot$NORM_FRAME < time_cutoff) &
+      (dat_to_plot$NORM_FRAME >= min_track_duration),]$NORM_ID)
+  dat_to_plot <- dat_to_plot[dat_to_plot$NORM_ID %in% norm_ids_to_plot,]
+  
+  # order by CVC positive spots and regions
+  dat_to_plot$TRACK_CVC_POS_V_REGIONS <- dat_to_plot$TRACK_CVC_POS/dat_to_plot$TRACK_CVC_REGIONS
+  dat_to_plot <- dat_to_plot[with(dat_to_plot, order(-TRACK_CVC_POS_V_REGIONS, TRACK_CVC_REGIONS)),]
+  dat_to_plot$NORM_ID <- factor(dat_to_plot$NORM_ID,
+                                 levels = unique(dat_to_plot$NORM_ID))
+  
+  # select tracks
+  list_to_plot <- c()
+  dat_pos <- dat_to_plot[(dat_to_plot$TRACK_CVC_POS >= cvc_threshold) &
+                               (dat_to_plot$TRACK_PRELOADED == F),]
+  dat_pre <- dat_to_plot[(dat_to_plot$TRACK_CVC_POS >= cvc_threshold) &
+                               (dat_to_plot$TRACK_PRELOADED == T),]
+  dat_neg <- dat_to_plot[(dat_to_plot$TRACK_CVC_POS < cvc_threshold),]
+  
+  # differentiate between likely candidates and unlikely positive candidates
+  norm_ids_cdt <- unique(dat_pos[
+    (dat_pos$NORM_FRAME > dat_pos$TRACK_LAST_NORM_FRAME - last_frame_cutoff) &
+      (dat_pos$IS_CVC_POS > 0),]$NORM_ID)
+  dat_cdt <- dat_pos[(dat_pos$NORM_ID %in% norm_ids_cdt),]
+  dat_pos <- dat_pos[!(dat_pos$NORM_ID %in% norm_ids_cdt),]
+  
+  list_to_plot <- c(list_to_plot, list(dat_cdt))
+  list_to_plot <- c(list_to_plot, list(dat_pos))
+  list_to_plot <- c(list_to_plot, list(dat_pre))
+  list_to_plot <- c(list_to_plot, list(dat_neg))
+  
+  for (cur_list_dat in list_to_plot) {
+    # cut off data by limit
+    cur_head_ids <- unique(cur_list_dat$NORM_ID)[1:dat_lim]
+    cur_list_dat <- cur_list_dat[cur_list_dat$NORM_ID %in% cur_head_ids, ]
+    
+    # plot CVC and speed
+    p <- ggplot(data = cur_list_dat, aes(x = FRAME/10)) +
+      facet_wrap(NORM_ID ~ ., ncol = 1) +
+      geom_line(aes(y = VELOCITY), colour = "Black") +
+      geom_area(aes(y = IS_CVC_POS * ylim), fill = alpha("Magenta", alpha_val)) +
+      theme_classic() +
+      ylim(0, ylim) +
+      xlim(0, timepoints/10) +
+      # geom_hline(yintercept = 5, linetype = "dashed", colour = "grey") +
+      scale_y_continuous("Speed (μm/min)", breaks = seq(0, ylim, 2),
+                         sec.axis = sec_axis(~./ylim, name = "CVC+ (boolean)", breaks = seq(0,1,1))) +
+      xlab("Time (hrs)") +
+      theme(strip.text.y = element_text(size = 6))
+  
+    # add plot to list
+    donor_plots <- c(donor_plots, list(p))
+  }
+}
+
+library(ggpubr)
+ggarrange(
+  donor_plots[[1]],
+  # donor_plots[[2]],
+  # donor_plots[[3]],
+  # donor_plots[[4]],
+  donor_plots[[5]],
+  # donor_plots[[6]],
+  # donor_plots[[7]],
+  # donor_plots[[8]],
+  donor_plots[[9]],
+  # donor_plots[[10]],
+  # donor_plots[[11]],
+  # donor_plots[[12]],
+  ncol = 4, nrow = 1
+)
+```
+
+---
+FRI 18/01/2019
+---
+Plot spots versus CVC+
+```{r fig_cvc_speed_2, fig.height = 3, fig.width = 5}
+library(ggplot2)
+dat_to_plot <- df_links_spots
+
+pd <- position_dodge(1)
+
+ggplot(data = dat_to_plot, aes(x=donor, y=VELOCITY,
+                               fill=factor(IS_CVC_POS), group=interaction(donor, factor(IS_CVC_POS))
+                               )) +
+  scale_fill_manual(values=c("Cyan", "Magenta")) +
+  geom_violin(trim=FALSE, position=pd) + geom_boxplot(width=0.1, position=pd) +
+  theme_classic() +
+  theme(#strip.background = element_blank(),
+        #strip.text = element_blank(),
+        legend.position = c(0.9, 0.9)
+        ) +
+  labs(x="Donors", y="Speed (μm/min)", fill=element_blank())
+
+# add track information from spots to tracks
+df_tracking_spots <- merge(df_tracking,
+      df_spots[df_spots$NORM_FRAME == 0,
+               c("NORM_ID", "TRACK_ID", "TRACK_CVC_POS", "TRACK_PRELOADED")],
+      by = c("NORM_ID", "TRACK_ID"),
+      all.x = T)
+
+alpha_val <- 0.4
+
+ggplot(data = df_tracking_spots[df_tracking_spots$donor != "FL-DC",],
+       aes(x=TRACK_MEAN_SPEED, y=TRACK_CVC_POS)) +
+  theme_classic() +
+  geom_point(shape=1, col=alpha("Black", alpha_val)) +
+  facet_wrap(~donor, ncol=3)
+```
+
+
+---
+WED 16/01/2019
+---
+Compare CVC+ and CVC- tracks
+
+```{r fig_cvc_pos_neg, fig.height = 5, fig.width = 10}
+require(ggplot2)
+library(scales)
+library("RColorBrewer")
+
+# sort donor levels
+donor_levels <- c("PF", "3T3", "B16")
+df_tracking$donor <- factor(df_tracking$donor, levels = donor_levels)
+
+# get CVC+ track IDs that not preloaded
+cvc_pos_ids <- unique(df_spots[(df_spots$TRACK_CVC_POS >= cvc_threshold)
+                        & (df_spots$TRACK_PRELOADED == F),]$NORM_ID)
+cvc_pre_ids <- unique(df_spots[(df_spots$TRACK_CVC_POS >= cvc_threshold)
+                        & (df_spots$TRACK_PRELOADED == T),]$NORM_ID)
+cvc_unc_ids <- unique(df_spots[(df_spots$TRACK_CVC_POS < cvc_threshold)
+                               & (df_spots$TRACK_CVC_POS > 0),]$NORM_ID)
+cvc_neg_ids <- unique(df_spots[(df_spots$TRACK_CVC_POS == 0),]$NORM_ID)
+
+df_tracking$CVC_POS <- 'NA'
+df_tracking[df_tracking$NORM_ID %in% cvc_pos_ids,]$CVC_POS <- 'CVC+'
+df_tracking[df_tracking$NORM_ID %in% cvc_neg_ids,]$CVC_POS <- 'CVC-'
+df_tracking[df_tracking$NORM_ID %in% cvc_pre_ids,]$CVC_POS <- 'Preloaded'
+df_tracking[df_tracking$NORM_ID %in% cvc_unc_ids,]$CVC_POS <- 'CVC-'
+df_tracking$CVC_POS <- factor(df_tracking$CVC_POS, levels = c('CVC-', 'CVC+', 'Preloaded'))
+
+dat_to_plot <- df_tracking[!(is.na(df_tracking$donor)),]
+pd <- position_dodge(1)
+plot_cols <- brewer.pal(n = 3, name = "Pastel1")
+
+p1 <- ggplot(data = dat_to_plot, aes(x=donor, y=TRACK_DISPLACEMENT,
+                               fill=CVC_POS, group=interaction(donor,CVC_POS)
+                               )) +
+  scale_fill_manual(values=plot_cols) +
+  geom_violin(trim=FALSE, position=pd) + geom_boxplot(width=0.1, position=pd) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank(),
+        legend.position = c(0.9, 0.9)
+        ) +
+  labs(x="Donors", y="Displacement (μm)", fill=element_blank())
+p2 <- ggplot(data = dat_to_plot, aes(x=donor, y=TRACK_MEAN_SPEED,
+                               fill=CVC_POS, group=interaction(donor,CVC_POS)
+                               )) +
+  scale_fill_manual(values=plot_cols) +
+  geom_violin(trim=FALSE, position=pd) + geom_boxplot(width=0.1, position=pd) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank(),
+        legend.position = c(0.9, 0.9)
+        ) +
+  labs(x="Donors", y="Speed (μm/min)", fill=element_blank())
+
+library(ggpubr)
+
+ggarrange(
+  p1, p2,
+  ncol = 2, nrow = 1
+)
+```
+
+---
+FRI 18/01/2019
+---
+
+Show a distribution of the different track types
+```{r fig_pies, fig.height = 5, fig.width = 5}
+cvc_freq_dat <- table(df_tracking$CVC_POS, df_tracking$donor)
+
+# draw pie charts per donor
+for(cur_donor in colnames(cvc_freq_dat)) {
+  slices <- cvc_freq_dat[, cur_donor]
+  lbls <- rownames(cvc_freq_dat)
+  
+  # add percentage
+  pct <- round(slices/sum(slices) * 100)
+  lbls <- paste(lbls, "(", pct, "%)", sep="")
+  
+  par(mai=c(1,1,1,1))
+  pie(slices, labels = lbls, col = brewer.pal(n = 3, name = "Pastel1"))
+}
+```
+
+---
+MON 21/01/2019
+---
+
+Can you extract the tracks that worked? Then try to see which parameters you can try to tweak to increase the portion of the tracks that actually worked. The ones that worked have a long sequence of consecutive CVC+ events.
+
+```{r}
+
+```
+

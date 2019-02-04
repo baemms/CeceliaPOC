@@ -1,0 +1,196 @@
+---
+title: "Analyse DCs with T cells"
+output: html_notebook
+---
+
+---
+WED 14/11/2018
+---
+Extract how many DCs are covered with T cells.
+
+```{r}
+# read in file
+df_stats_base_dir <- "/Users/dominiks/Desktop/ANALYSIS/N4/"
+experiments <- c("N4-2-15")
+analysis_dir <- "/ANALYSIS/DC_WITH_TCELL/"
+stats_file <- "stats.csv"
+
+# well mapping
+well_conc_map <- hash(c(
+  "N4-2-15" = hash(c(
+    "1" = "1", "2" = "1/2", "3" = "1/4", "4" = "1/8",
+    "5" = "1/16", "6" = "1/32", "7" = "0", "8" = "0"
+  ))
+))
+
+conc_levels <- c("1", "1/2", "1/4", "1/8", "1/16", "1/32", "0")
+
+dfs_overlap <- list()
+for (cur_exp in experiments) {
+  cur_df <- read.csv(
+    paste(df_stats_base_dir, cur_exp, analysis_dir, stats_file, sep = ""))
+  
+  cur_df$exp <- cur_exp
+  cur_df$conc <- 0
+  
+  # map conc to wells
+  for (cur_well in unique(cur_df$well)) {
+    
+    cur_df[cur_df$well == cur_well,]$conc <- well_conc_map[[cur_exp]][[1]][[as.character(cur_well)]]
+  }
+  cur_df$conc <- factor(cur_df$conc, levels = conc_levels)
+  
+  dfs_overlap[[cur_exp]] <- cur_df
+  remove(cur_df)
+}
+
+# merge experiments
+df_overlap <- do.call("rbind", dfs_overlap)
+
+# assume a T cell has a radius of 10pixels
+tcell_size <- pi * (10 ^2)
+df_overlap$tcells_approx <- df_overlap$tcell_area/tcell_size
+df_overlap$tcells_on_dc_approx <- df_overlap$tcell_area_on_dc/tcell_size
+df_overlap$tcells_on_dc_overlap_approx <- df_overlap$tcell_area_on_dc_overlap/tcell_size
+
+# calculate ratios
+df_overlap$ratio_dc_overlapping <- df_overlap$dc_overlapping_count/df_overlap$dc_count
+df_overlap$tcells_per_dc <- df_overlap$tcells_approx/df_overlap$dc_count
+df_overlap$tcells_on_dc_per_dc <- df_overlap$tcells_on_dc_approx/df_overlap$dc_count
+df_overlap$tcells_on_dc_overlap_per_dc <- df_overlap$tcells_on_dc_overlap_approx/df_overlap$dc_overlapping_count
+```
+
+```{r}
+# ---
+# MON 26/11/2018
+# ---
+# remove sites that did not work for T cell overlap
+df_overlap <- df_overlap[!((df_overlap$well == 1) & (df_overlap$site == 0)),]
+df_overlap <- df_overlap[!((df_overlap$well == 2) & (df_overlap$site == 0)),]
+df_overlap <- df_overlap[!((df_overlap$well == 2) & (df_overlap$site == 2)),]
+df_overlap <- df_overlap[!((df_overlap$well == 3) & (df_overlap$site == 0)),]
+df_overlap <- df_overlap[!((df_overlap$well == 3) & (df_overlap$site == 2)),]
+df_overlap <- df_overlap[!((df_overlap$well == 4) & (df_overlap$site == 2)),]
+df_overlap <- df_overlap[!((df_overlap$well == 5) & (df_overlap$site == 0)),]
+df_overlap <- df_overlap[!((df_overlap$well == 5) & (df_overlap$site == 2)),]
+df_overlap <- df_overlap[!((df_overlap$well == 6) & (df_overlap$site == 0)),]
+```
+
+
+```{r fig_overlap_time, fig.height = 15, fig.width = 10}
+library(plyr)
+
+# go through sites
+ylim_ratio <- c(0, 1)
+ylim_dc <- c(0,round_any(max(df_overlap$dc_count), 10, f = ceiling))
+ylim_tcells <- c(0,round_any(max(df_overlap$tcells_on_dc_approx), 10, f = ceiling))
+ylim_tcells_per_dc <- c(0,round_any(max(df_overlap$tcells_per_dc), 10, f = ceiling))
+ylim_tcells_on_dc_per_dc <- c(0,round_any(max(df_overlap$tcells_on_dc_per_dc), 2, f = ceiling))
+ylim_tcells_on_dc_overlap <- c(0,round_any(max(df_overlap$tcells_on_dc_overlap_approx), 10, f = ceiling))
+ylim_tcells_on_dc_overlap_per_dc <- c(0,round_any(max(df_overlap$tcells_on_dc_overlap_per_dc), 2, f = ceiling))
+lwd <- 2
+
+# 
+names(df_overlap)[names(df_overlap) == 'frame'] <- 'time'
+df_overlap <- df_overlap[order(df_overlap$well),]
+
+par(mfrow = c(7, 5))
+for (cur_exp in unique(df_overlap$exp)) {
+  for (cur_well in unique(df_overlap$well)) {
+    for (cur_site in unique(df_overlap$site)) {
+      cur_df <- df_overlap[
+          (df_overlap$exp == cur_exp)
+          & (df_overlap$well == cur_well)
+          & (df_overlap$site == cur_site), ]
+      
+      # plot
+      plot(ratio_dc_overlapping ~ time, data = cur_df, col = "Magenta",
+           main = paste(cur_exp, "-", cur_well, "/", cur_site),
+           ylim = ylim_ratio, ylab = "ratio")
+      par(new = T)
+      plot(tcells_on_dc_per_dc ~ time, data = cur_df, col = "Black",
+           ylim = ylim_tcells_on_dc_per_dc, ylab = "",
+           axes = FALSE, bty = "n")
+      axis(side = 4, at = pretty(ylim_tcells_on_dc_per_dc))
+    }
+  }
+}
+```
+
+---
+MON 14/01/2019
+---
+Show means of T cell association over time and compare between concentrations.
+```{r fig_means_over_time, fig.height = 6, fig.width = 10}
+library(Rmisc)
+library("RColorBrewer")
+library(ggplot2)
+
+# calculate summary
+df_summary <- summarySE(df_overlap,
+                                measurevar="ratio_dc_overlapping",
+                                groupvars=c("conc", "time"),
+                                na.rm=TRUE)
+
+# plot summary
+pd <- position_dodge(0.5)
+ggplot(df_summary, aes(x=time/10, y=ratio_dc_overlapping, colour=conc, group=conc)) + 
+  geom_errorbar(aes(ymin=ratio_dc_overlapping-se, ymax=ratio_dc_overlapping+se), width=0.2, position=pd) +
+  geom_line() +
+  geom_point(size=2) +
+  theme_classic() +
+  xlab("Time (hrs)") +
+  ylab("T cell+ DCs (ratio)") +
+  scale_color_manual(
+    name="PIC concentration (nM)",
+    values=brewer.pal(n = 7, name = "Dark2")) +
+  theme(legend.justification=c(0,1),
+        legend.position=c(0,1),
+        legend.margin = margin(l = 1, unit='cm'),
+        legend.background = element_blank(),
+        #legend.position="none",
+        strip.background = element_blank(),
+        strip.text = element_blank()
+        ) 
+```
+
+Compare mean values.
+```{r fig_summary, fig.height = 4, fig.width = 6}
+require(ggplot2)
+
+# only take values after 7hrs into account
+df_to_plot <- df_overlap[df_overlap$time >= 70,]
+
+ggplot(data = df_to_plot, aes(x=factor(well), y=ratio_dc_overlapping)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) + facet_wrap(~exp, ncol = 2) +
+  ylim(c(0, 1))
+ggplot(data = df_to_plot, aes(x=factor(well), y=tcells_on_dc_per_dc)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) + facet_wrap(~exp, ncol = 2) +
+  ylim(c(0, max(df_to_plot$tcells_on_dc_per_dc)))
+ggplot(data = df_to_plot, aes(x=factor(well), y=tcells_on_dc_overlap_per_dc)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) + facet_wrap(~exp, ncol = 2) +
+  ylim(c(0, max(df_to_plot$tcells_on_dc_overlap_per_dc)))
+```
+
+```{r fig_means_summary_b, fig.height = 5, fig.width = 5}
+# only take values after 7hrs into account
+df_to_plot <- df_overlap[df_overlap$time >= 70,]
+
+ggplot(data = df_to_plot, aes(x=factor(conc), y=ratio_dc_overlapping)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) +
+  ylim(c(0, 1)) +
+  xlab("PIC concentration (nM)") +
+  ylab("T cell+ DCs (ratio)") +
+  theme_classic()
+ggplot(data = df_to_plot, aes(x=factor(conc), y=tcells_on_dc_per_dc)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) +
+  xlab("PIC concentration (nM)") +
+  ylab("T cells per DC (average)") +
+  theme_classic()
+ggplot(data = df_to_plot, aes(x=factor(conc), y=tcells_on_dc_overlap_per_dc)) +
+  geom_violin(trim=FALSE) + geom_boxplot(width=0.1) +
+  xlab("PIC concentration (nM)") +
+  ylab("T cells per T cell+ DC (average)") +
+  theme_classic()
+```
+
