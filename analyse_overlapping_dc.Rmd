@@ -1,0 +1,158 @@
+---
+title: "Analyse DCs overlapping with donors"
+output: html_notebook
+---
+
+---
+MON 22/10/2018
+---
+
+Run FIJI script (extract_overlapping_dc.ijm) and analyse results.
+```{r}
+library(hash)
+
+# read in file
+df_stats_base_dir <- "/Users/dominiks/Desktop/ANALYSIS/N4/"
+experiments <- c("N4-2-7", "N4-2-9", "N4-2-13")
+analysis_dir <- "/ANALYSIS/OVERLAPPING_DC/"
+stats_file <- "stats.csv"
+
+dfs_overlap <- list()
+for (cur_exp in experiments) {
+  cur_df_overlap <- read.csv(
+    paste(df_stats_base_dir, cur_exp, analysis_dir, stats_file, sep = ""))
+  
+  cur_df_overlap$exp <- cur_exp
+  
+  dfs_overlap[[cur_exp]] <- cur_df_overlap
+  remove(cur_df_overlap)
+}
+
+# merge experiments
+df_overlap <- do.call("rbind", dfs_overlap)
+
+# calculate ratios
+df_overlap$ratio_dc_overlapping <- df_overlap$dc_overlapping_count/df_overlap$dc_count
+df_overlap$ratio_donor_area <- df_overlap$donor_dil_area/df_overlap$total_area
+df_overlap$ratio_dc_donor <- df_overlap$ratio_dc_overlapping/df_overlap$ratio_donor_area
+
+# --- START SAT 03/11/2018
+# convert columns to df_dc standard
+names(df_overlap)[names(df_overlap) == 'frame'] <- 'time'
+
+image_donor_map <- hash(c(
+  "N4-2-7" = hash(c(
+    "Well1_Seq0000" = "B16", "Well3_Seq0002" = "B16",
+    "Well2_Seq0001" = "3T3", "Well4_Seq0003" = "3T3",
+    "Well5_Seq0007" = "PF", "Well7_Seq0005" = "PF"
+  )),
+  "N4-2-9" = hash(c(
+    "Well1_Seq0000" = "B16", "Well3_Seq0002" = "B16",
+    "Well2_Seq0001" = "3T3", "Well4_Seq0003" = "3T3",
+    "Well5_Seq0007" = "PF", "Well7_Seq0005" = "PF"
+  )),
+  "N4-2-13" = hash(c(
+    "Well1_Seq0000" = "B16", "Well5_Seq0007" = "B16",
+    "Well2_Seq0001" = "3T3", "Well6_Seq0006" = "3T3",
+    "Well3_Seq0002" = "PF", "Well7_Seq0005" = "PF"
+  ))
+))
+
+image_sample_map <- hash(c(
+  "N4-2-7" = hash(c(
+    "Well1_Seq0000" = "A", "Well2_Seq0001" = "A", "Well5_Seq0007" = "A",
+    "Well3_Seq0002" = "B", "Well4_Seq0003" = "B", "Well7_Seq0005" = "B"
+  )),
+  "N4-2-9" = hash(c(
+    "Well1_Seq0000" = "A", "Well2_Seq0001" = "A", "Well5_Seq0007" = "A",
+    "Well3_Seq0002" = "B", "Well4_Seq0003" = "B", "Well7_Seq0005" = "B"
+  )),
+  "N4-2-13" = hash(c(
+    "Well1_Seq0000" = "TC", "Well2_Seq0001" = "TC", "Well3_Seq0002" = "TC",
+    "Well5_Seq0007" = "COLI", "Well6_Seq0006" = "COLI", "Well7_Seq0005" = "COLI"
+  ))
+))
+
+donor_levels <- c(
+  "PF",
+  "3T3",
+  "B16"
+)
+
+sample_levels <- c(
+  "A", "B", "TC", "COLI"
+)
+
+# assign donor and sample
+df_overlap$donor <- "NONE"
+df_overlap$sample <- "NA"
+for (cur_exp in unique(df_overlap$exp)){
+  for (cur_image in unique(df_overlap[(df_overlap$exp == cur_exp),]$image)){
+    df_overlap[(df_overlap$exp == cur_exp) &
+               (df_overlap$image == cur_image),]$donor <- image_donor_map[[cur_exp]][[cur_image]]
+    df_overlap[(df_overlap$exp == cur_exp) &
+               (df_overlap$image == cur_image),]$sample <- image_sample_map[[cur_exp]][[cur_image]]
+  }
+}
+df_overlap$donor <- factor(df_overlap$donor, levels = donor_levels)
+df_overlap$sample <- factor(df_overlap$sample, levels = sample_levels)
+
+# # calculate mean eccentricity and plot as well
+# aggr_eccentricity <- setNames(
+#   aggregate(df_dc$AreaShape_Eccentricity,
+#             list(df_dc$exp, df_dc$donor, df_dc$sample,
+#                  df_dc$Metadata_Site, df_dc$Metadata_Time),
+#             mean),
+#   c("exp", "donor", "sample", "site", "time", "mean_eccentricity")
+# )
+# 
+# # merge with overlap
+# df_overlap <- merge(x = df_overlap, y = aggr_eccentricity,
+#       by = c("exp", "donor", "sample", "site", "time"),
+#       all.x = T)
+# --- END
+```
+
+Compare the values between samples
+```{r fig_overlap, fig.height = 1.5, fig.width = 1.5}
+require(ggplot2)
+
+# group A and B to TC
+if (any(df_overlap$sample %in% c("A", "B")) != F){
+  df_overlap[df_overlap$sample %in% c("A", "B"),]$sample <- "TC"
+}
+df_overlap$donor <- factor(df_overlap$donor, levels = donor_levels)
+
+df_to_plot <- df_overlap[df_overlap$sample == "TC",]
+
+ggplot(data = df_to_plot, aes(x=factor(donor), y=ratio_dc_overlapping)) +
+  geom_violin() +
+  facet_wrap(~sample, ncol = 2) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank()
+        ) +
+  xlab ("Donors") + ylab("Overlapping DC (ratio)") + ylim(0, 1) +
+  stat_summary(fun.y=mean, geom="point", size=2, shape=18, color="Magenta")
+
+ggplot(data = df_to_plot, aes(x=factor(donor), y=ratio_donor_area)) +
+  geom_violin() +
+  facet_wrap(~sample, ncol = 2) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank()
+        ) +
+  xlab ("Donors") + ylab("Donor area (ratio)") + ylim(0, 1) +
+  stat_summary(fun.y=mean, geom="point", size=2, shape=18, color="Magenta")
+
+ggplot(data = df_to_plot, aes(x=factor(donor), y=ratio_dc_donor)) +
+  geom_hline(yintercept = 1, linetype = "solid", colour = "grey", size = 1.5) +
+  geom_violin() +
+  facet_wrap(~sample, ncol = 2) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank()
+        ) +
+  xlab ("Donors") + ylab("Overlapping DC to donor area (ratio)") +
+  stat_summary(fun.y=mean, geom="point", size=2, shape=18, color="Magenta")
+```

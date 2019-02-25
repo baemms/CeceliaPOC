@@ -1,0 +1,124 @@
+---
+title: "time projection"
+output: html_notebook
+---
+
+---
+WED 17/10/2018
+---
+
+Analyse merged timeprojections from FIJI.
+
+```{r}
+library(scales)
+require(ggplot2)
+require(gridExtra)
+library(Rmisc)
+
+with_donor <- F
+
+# define files
+df_stats_base_dir <- "/Users/dominiks/Desktop/ANALYSIS/N4/"
+analysis_dir <- "/ANALYSIS/TIME_PROJECTION_MERGE/"
+experiments <- c("N4-2-7", "N4-2-9", "N4-2-13")
+df_stats_file <- if (with_donor) "hist_with_donor" else "hist"
+df_stats_files_suffix <- ".csv"
+
+# load csvs
+dfs_hist <- list()
+for (cur_exp in experiments) {
+  cur_csv_dat <- read.csv(paste(df_stats_base_dir, cur_exp, analysis_dir,
+                                        df_stats_file,
+                                        df_stats_files_suffix, sep = ""))
+  # add exp id
+  cur_csv_dat$exp <- cur_exp
+  
+  dfs_hist[[cur_exp]] <- cur_csv_dat
+}
+
+# merge dataframes
+df_hist <- do.call("rbind", dfs_hist)
+
+df_hist$donor <- "NONE"
+donor_levels <- if (with_donor) c("PF", "3T3", "B16") else c("PF", "3T3", "B16", "NONE")
+df_hist$donor <- factor(df_hist$donor, levels = donor_levels)
+
+# --- TC only samples ---
+df_hist[df_hist$image %in% c("Well1_Seq0000", "Well3_Seq0002") &
+          (df_hist$exp %in% c("N4-2-7", "N4-2-9")),]$donor <- "B16"
+df_hist[df_hist$image %in% c("Well2_Seq0001", "Well4_Seq0003") &
+          (df_hist$exp %in% c("N4-2-7", "N4-2-9")),]$donor <- "3T3"
+df_hist[df_hist$image %in% c("Well5_Seq0007", "Well7_Seq0005") &
+          (df_hist$exp %in% c("N4-2-7", "N4-2-9")),]$donor <- "PF"
+if (!with_donor) {
+  df_hist[df_hist$image %in% c("Well6_Seq0006", "Well8_Seq0004") &
+          (df_hist$exp %in% c("N4-2-7", "N4-2-9")),]$donor <- "NONE"
+}
+
+df_hist$sample <- "NONE"
+df_hist$sample <- factor(df_hist$sample, levels = c("A", "B", "TC", "Col-I"))
+
+df_hist[df_hist$image %in% c("Well1_Seq0000", "Well2_Seq0001",
+                             "Well5_Seq0007", "Well6_Seq0006") &
+          (df_hist$exp %in% c("N4-2-7", "N4-2-9")),]$sample <- "A"
+df_hist[df_hist$image %in% c("Well3_Seq0002", "Well4_Seq0003",
+                             "Well7_Seq0005", "Well8_Seq0004") &
+          (df_hist$exp %in% c("N4-2-7", "N4-2-9")),]$sample <- "B"
+
+# --- TC and Col-I samples ---
+df_hist[df_hist$image %in% c("Well1_Seq0000", "Well5_Seq0007") &
+          (df_hist$exp %in% c("N4-2-13")),]$donor <- "B16"
+df_hist[df_hist$image %in% c("Well2_Seq0001", "Well6_Seq0006") &
+          (df_hist$exp %in% c("N4-2-13")),]$donor <- "3T3"
+df_hist[df_hist$image %in% c("Well3_Seq0002", "Well7_Seq0005") &
+          (df_hist$exp %in% c("N4-2-13")),]$donor <- "PF"
+if (!with_donor) {
+  df_hist[df_hist$image %in% c("Well4_Seq0003", "Well8_Seq0004") &
+          (df_hist$exp %in% c("N4-2-13")),]$donor <- "NONE"
+}
+
+df_hist[df_hist$image %in% c("Well1_Seq0000", "Well2_Seq0001",
+                             "Well3_Seq0002", "Well4_Seq0003") &
+          (df_hist$exp %in% c("N4-2-13")),]$sample <- "TC"
+df_hist[df_hist$image %in% c("Well5_Seq0007", "Well6_Seq0006",
+                             "Well7_Seq0005", "Well8_Seq0004") &
+          (df_hist$exp %in% c("N4-2-13")),]$sample <- "Col-I"
+
+# calculate ratios
+df_hist$dc_foci_ratio <- df_hist$dc_foci/df_hist$dc
+if (with_donor) {
+  df_hist$dc_on_donor_ratio <- df_hist$dc_on_donor/df_hist$dc_foci
+  df_hist$donor_with_dc_ratio <- df_hist$dc_on_donor/df_hist$donor_foci
+}
+
+# group A and B to TC
+df_hist[df_hist$sample %in% c("A", "B"),]$sample <- "TC"
+
+#par(mfrow = c(1, 3))
+#boxplot(dc_foci_ratio ~ donor, data = df_hist, ylim = c(0,1), ylab = "DC foci (%)")
+#if (with_donor) {
+#  boxplot(dc_on_donor_ratio ~ donor, data = df_hist, ylim = c(0,1), ylab = "DC on donors (%)")
+#  boxplot(donor_with_dc_ratio ~ donor, data = df_hist, ylim = c(0,1), ylab = "donors with DC (%)")
+#}
+```
+
+```{r fig1, fig.height = 1.3, fig.width = 1.3}
+# show plots
+ggplot(data = df_hist[df_hist$sample == "TC",], aes(x=donor, y=dc_foci_ratio)) +
+  geom_violin() +
+  facet_wrap(~sample, ncol = 2) +
+  ylim(c(0, 1)) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank()
+        ) +
+  xlab("Donors") +
+  ylab("Sessile pixels (ratio)") +
+  stat_summary(fun.y=mean, geom="point", size=2, shape=18, color="Magenta")
+```
+
+
+
+
+
+

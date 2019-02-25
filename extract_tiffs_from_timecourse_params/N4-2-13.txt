@@ -1,0 +1,45 @@
+---
+N4-2-13
+---
+!! Use version 2 of extraction script
+--
+FL-DC-d9 + B16/3T3/PF +/- Collagen-I
+--
+
+path_image_data = '/Volumes/DOM1/IMAGE/JOBS/N4-2 Projects/DC-donor/DC_donor/20181122_175053_667/'
+path_image_tifs = '/Users/dominiks/Desktop/ANALYSIS/N4/N4-2-13/ANALYSIS/channel-tifs/'
+file_image_data = (
+    'Well1_Seq0000',
+    'Well2_Seq0001',
+    'Well3_Seq0002',
+    'Well4_Seq0003',
+    'Well5_Seq0007',
+    'Well6_Seq0006',
+    'Well7_Seq0005',
+    'Well8_Seq0004'
+)
+file_ext_nd2 = ".nd2"
+file_ext_tif = ".tif"
+sites = range(0, 3)
+timepoints = 160
+has_series = False
+required_channels = (
+    (2, 3),
+    (2, 3),
+    (2, 3),
+    (2,),
+    (2, 3),
+    (2, 3),
+    (2, 3),
+    (2,)
+)
+channel_names = (
+    ("GFP", "CVC"),
+    ("GFP", "CVC"),
+    ("GFP", "CVC"),
+    ("GFP",),
+    ("GFP", "CVC"),
+    ("GFP", "CVC"),
+    ("GFP", "CVC"),
+    ("GFP",)
+)

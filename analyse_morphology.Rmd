@@ -1,0 +1,318 @@
+---
+title: "Analyse DC morphology"
+output:
+  html_notebook: 
+    fig_height: 40
+    fig_width: 10
+---
+
+```{r}
+library(scales)
+library(dplyr)
+library(tidyr)
+
+# define files
+df_stats_base_dir <- "/Users/dominiks/Desktop/ANALYSIS/N4/"
+experiments <- c("N4-2-7", "N4-2-9", "N4-2-13")
+analysis_dir <- "/ANALYSIS/CP/OUT/stats/"
+df_stats_file <- "DC_CLEAN"
+df_image_base_file <- "Image"
+df_stats_files_prefix <- "DC_"
+df_stats_files_suffix <- ".csv"
+
+seg_bit <- 255
+
+# define path to images
+image_base_dir <- "/ANALYSIS/channel-tifs/"
+seg_base_dir <- "/ANALYSIS/CP/OUT/DC/"
+image_file_suffix <- "_cGFP.tif"
+seg_file_suffix <- "_cGFP_DC.tiff"
+
+# define file conventions
+file_conv_csv_sep <- ","
+
+# specify columns to select
+selected_columns <- c(
+  "Metadata_Time",
+  "AreaShape_Area",
+  "AreaShape_Eccentricity",
+  "AreaShape_FormFactor"
+)
+
+# load image information for each experiment, then merge
+dfs_dc <- list()
+for (cur_exp in experiments) {
+  cur_df_image <- read.csv(
+    paste(df_stats_base_dir, cur_exp, analysis_dir,
+          df_stats_files_prefix, df_image_base_file, df_stats_files_suffix, sep = ""),
+    sep = file_conv_csv_sep)
+  
+  cur_df_dc <- read.csv(
+    paste(df_stats_base_dir, cur_exp, analysis_dir,
+          df_stats_files_prefix, df_stats_file, df_stats_files_suffix, sep = ""),
+    sep = file_conv_csv_sep)
+  
+  cur_df_dc$exp <- cur_exp
+  
+  cur_df_dc <- merge(x = cur_df_dc, y = cur_df_image, by = "ImageNumber", all.x = TRUE)
+  
+  dfs_dc[[cur_exp]] <- cur_df_dc
+  remove(cur_df_dc)
+}
+
+# merge experiments
+df_dc <- do.call("rbind", dfs_dc)
+remove(dfs_dc)
+
+# define experiment
+exp_timepoint_min <- min(df_dc$Metadata_Time)
+exp_timepoint_max <- max(df_dc$Metadata_Time)
+exp_site_min <- min(df_dc$Metadata_Site)
+exp_site_max <- max(df_dc$Metadata_Site)
+
+# get timepoints and sites
+timepoints <- unique(df_dc$Metadata_Time)
+timepoints <- sort(timepoints[!is.na(timepoints)])
+timepoints <- timepoints[timepoints > 20]
+sites <- unique(df_dc$Metadata_Site)
+sites <- sort(sites[!is.na(sites)])
+
+# calculate well if not in dataframe
+if (!("Metadata_Well" %in% colnames(df_dc))){
+  df_dc$Metadata_Well <- ceiling((df_dc$ImageNumber / max(timepoints)) / max(sites))
+}
+
+wells <- sort(unique(df_dc$Metadata_Well))
+
+donor_desc_n13 <- c("B16", "3T3", "PF", "NONE", "B16", "3T3", "PF", "NONE")
+donor_desc_n7_9 <- c("B16", "3T3", "B16", "3T3", "PF", "NONE", "PF", "NONE")
+donor_levels <- c("PF", "3T3", "B16", "NONE")
+
+sample_desc_n13 <- c("TC", "TC", "COLI", "COLI")
+sample_desc_n7_9 <- c("A", "B", "A", "B")
+sample_levels <- c("A", "B", "TC", "COLI")
+
+# assign donor
+df_dc$donor <- "NONE"
+df_dc[df_dc$exp %in% c("N4-2-13"),]$donor <-
+  donor_desc_n13[df_dc[df_dc$exp %in% c("N4-2-13"),]$Metadata_Well]
+df_dc[df_dc$exp %in% c("N4-2-7", "N4-2-9"),]$donor <-
+  donor_desc_n7_9[df_dc[df_dc$exp %in% c("N4-2-7", "N4-2-9"),]$Metadata_Well]
+df_dc$donor <- factor(df_dc$donor, levels = donor_levels)
+
+# assign sample
+df_dc$sample <- "NONE"
+df_dc[df_dc$exp %in% c("N4-2-13"),]$sample <-
+  sample_desc_n13[ceiling(df_dc[df_dc$exp %in% c("N4-2-13"),]$Metadata_Well / 2)]
+df_dc[df_dc$exp %in% c("N4-2-7", "N4-2-9"),]$sample <-
+  sample_desc_n7_9[ceiling(df_dc[df_dc$exp %in% c("N4-2-7", "N4-2-9"),]$Metadata_Well / 2)]
+df_dc$sample <- factor(df_dc$sample, levels = sample_levels)
+
+# add ObjectNumber_in_Image
+df_dc$ObjectNumber_in_Image <- -1
+
+cur_max_obj <- aggregate(ObjectNumber ~ exp + ImageNumber, df_dc, max)
+
+names(cur_max_obj)[names(cur_max_obj) == 'ObjectNumber'] <- 'max_ObjectNumber'
+
+# merge to dataframe
+df_dc <- merge(
+  x = df_dc,
+  y = cur_max_obj,
+  by = c("exp", "ImageNumber")
+)
+
+df_dc$ObjectNumber_in_Image <-
+    round((seg_bit/df_dc$max_ObjectNumber) * df_dc$ObjectNumber)
+```
+
+```{r fig_ecc_time, fig.height = 1.5, fig.width = 3}
+library(Rmisc)
+library(ggplot2)
+
+pd <- position_dodge(0.5)
+
+df_to_plot <- df_dc[df_dc$exp %in% c("N4-2-7", "N4-2-9"),]
+df_summary <- summarySE(df_to_plot,
+                                measurevar="AreaShape_Eccentricity",
+                                groupvars=c("exp", "sample", "donor", "Metadata_Time"),
+                                na.rm=TRUE)
+
+ggplot(data = df_summary, aes(x=Metadata_Time/10, y=AreaShape_Eccentricity,
+                              colour=donor, group=donor)) +
+  geom_errorbar(aes(ymin=AreaShape_Eccentricity-se, ymax=AreaShape_Eccentricity+se), width=0.1, position=pd) +
+  geom_line() +
+  geom_point(size=0.1) +
+  theme_classic() +
+  facet_wrap(~exp, ncol = 4) +
+  xlab("Time (hrs)") +
+  ylab("Eccentricity\n(0: circle; 1: line)") +
+  scale_color_manual(
+    name="Cell type",
+    values=c("#cccc00", "Magenta", "Cyan", "Black")) +
+  guides(color = guide_legend(nrow=1)) +
+    theme(
+      legend.justification = c(0.98,0.05),
+      legend.position = c(0.98,0.05),
+      legend.text = element_text(size = 8),
+      legend.title = element_blank(),
+      #legend.position="none",
+      legend.box.background = element_rect(colour = "black"),
+      legend.margin = margin(r = 2),
+      strip.text.x = element_blank()
+      ) +
+  ylim(0.4, 0.7)
+
+df_summary <- summarySE(df_to_plot,
+                                measurevar="AreaShape_FormFactor",
+                                groupvars=c("exp", "sample", "donor", "Metadata_Time"),
+                                na.rm=TRUE)
+
+ggplot(data = df_summary, aes(x=Metadata_Time/10, y=AreaShape_FormFactor,
+                              colour=donor, group=donor)) +
+  geom_errorbar(aes(ymin=AreaShape_FormFactor-se, ymax=AreaShape_FormFactor+se), width=0.1, position=pd) +
+  geom_line() +
+  geom_point(size=0.1) +
+  theme_classic() +
+  facet_wrap(~exp, ncol = 4) +
+  xlab("Time (hrs)") +
+  ylab("FormFactor\n(1: circle; 0: irregular)") +
+  scale_color_manual(
+    name="Cell type",
+    values=c("#cccc00", "Magenta", "Cyan", "Black")) +
+  guides(color = guide_legend(nrow=1)) +
+    theme(
+      legend.justification = c(0.98,0.05),
+      legend.position = c(0.98,0.05),
+      legend.text = element_text(size = 8),
+      legend.title = element_blank(),
+      #legend.position="none",
+      legend.box.background = element_rect(colour = "black"),
+      legend.margin = margin(r = 2),
+      strip.text.x = element_blank()
+      ) +
+  ylim(0.45, 0.85)
+
+df_summary <- summarySE(df_to_plot,
+                                measurevar="AreaShape_Compactness",
+                                groupvars=c("exp", "sample", "donor", "Metadata_Time"),
+                                na.rm=TRUE)
+
+ggplot(data = df_summary, aes(x=Metadata_Time/10, y=AreaShape_Compactness,
+                              colour=donor, group=donor)) +
+  geom_errorbar(aes(ymin=AreaShape_Compactness-se, ymax=AreaShape_Compactness+se), width=0.1, position=pd) +
+  geom_line() +
+  geom_point(size=0.1) +
+  theme_classic() +
+  facet_wrap(~exp, ncol = 4) +
+  xlab("Time (hrs)") +
+  ylab("Compactness\n(1: circle; > 1: irregular)") +
+  scale_color_manual(
+    name="Cell type",
+    values=c("#cccc00", "Magenta", "Cyan", "Black")) +
+  guides(color = guide_legend(nrow=1)) +
+    theme(
+      legend.justification = c(0.98,0.05),
+      legend.position = c(0.98,0.05),
+      legend.text = element_text(size = 8),
+      legend.title = element_blank(),
+      #legend.position="none",
+      legend.box.background = element_rect(colour = "black"),
+      legend.margin = margin(r = 2),
+      strip.text.x = element_blank()
+      ) +
+  ylim(1, 1.3)
+```
+
+```{r fig_ecc_col, fig.height = 1.5, fig.width = 3}
+df_to_plot <- df_dc[df_dc$exp %in% c("N4-2-13"),]
+df_summary <- summarySE(df_to_plot,
+                                measurevar="AreaShape_Eccentricity",
+                                groupvars=c("exp", "sample", "donor", "Metadata_Time"),
+                                na.rm=TRUE)
+
+ggplot(data = df_summary, aes(x=Metadata_Time/10, y=AreaShape_Eccentricity,
+                              colour=donor, group=donor)) +
+  geom_errorbar(aes(ymin=AreaShape_Eccentricity-se, ymax=AreaShape_Eccentricity+se), width=0.1, position=pd) +
+  geom_line() +
+  geom_point(size=0.1) +
+  theme_classic() +
+  facet_wrap(~sample, ncol = 2) +
+  xlab("Time (hrs)") +
+  ylab("Eccentricity\n(0: circle; 1: line)") +
+  scale_color_manual(
+    name="Cell type",
+    values=c("#cccc00", "Magenta", "Cyan", "Black")) +
+  guides(color = guide_legend(nrow=1)) +
+    theme(
+      legend.justification = c(0.98,0.05),
+      legend.position = c(0.98,0.05),
+      legend.text = element_text(size = 8),
+      legend.title = element_blank(),
+      #legend.position="none",
+      legend.box.background = element_rect(colour = "black"),
+      legend.margin = margin(r = 2),
+      strip.text.x = element_blank(),
+      ) +
+  ylim(0.4, 0.7)
+
+df_summary <- summarySE(df_to_plot,
+                                measurevar="AreaShape_FormFactor",
+                                groupvars=c("exp", "sample", "donor", "Metadata_Time"),
+                                na.rm=TRUE)
+
+ggplot(data = df_summary, aes(x=Metadata_Time/10, y=AreaShape_FormFactor,
+                              colour=donor, group=donor)) +
+  geom_errorbar(aes(ymin=AreaShape_FormFactor-se, ymax=AreaShape_FormFactor+se), width=0.1, position=pd) +
+  geom_line() +
+  geom_point(size=0.1) +
+  theme_classic() +
+  facet_wrap(~sample, ncol = 2) +
+  xlab("Time (hrs)") +
+  ylab("FormFactor\n(1: circle; 0: irregular)") +
+  scale_color_manual(
+    name="Cell type",
+    values=c("#cccc00", "Magenta", "Cyan", "Black")) +
+  guides(color = guide_legend(nrow=1)) +
+    theme(
+      legend.justification = c(0.98,0.05),
+      legend.position = c(0.98,0.05),
+      legend.text = element_text(size = 8),
+      legend.title = element_blank(),
+      #legend.position="none",
+      legend.box.background = element_rect(colour = "black"),
+      legend.margin = margin(r = 2),
+      strip.text.x = element_blank()
+      ) +
+  ylim(0.45, 0.85)
+
+df_summary <- summarySE(df_to_plot,
+                                measurevar="AreaShape_Compactness",
+                                groupvars=c("exp", "sample", "donor", "Metadata_Time"),
+                                na.rm=TRUE)
+
+ggplot(data = df_summary, aes(x=Metadata_Time/10, y=AreaShape_Compactness,
+                              colour=donor, group=donor)) +
+  geom_errorbar(aes(ymin=AreaShape_Compactness-se, ymax=AreaShape_Compactness+se), width=0.1, position=pd) +
+  geom_line() +
+  geom_point(size=0.1) +
+  theme_classic() +
+  facet_wrap(~sample, ncol = 2) +
+  xlab("Time (hrs)") +
+  ylab("Compactness\n(1: circle; > 1: irregular)") +
+  scale_color_manual(
+    name="Cell type",
+    values=c("#cccc00", "Magenta", "Cyan", "Black")) +
+  guides(color = guide_legend(nrow=1)) +
+    theme(
+      legend.justification = c(0.98,0.05),
+      legend.position = c(0.98,0.05),
+      legend.text = element_text(size = 8),
+      legend.title = element_blank(),
+      #legend.position="none",
+      legend.box.background = element_rect(colour = "black"),
+      legend.margin = margin(r = 2),
+      strip.text.x = element_blank()
+      ) +
+  ylim(1, 1.3)
+```
